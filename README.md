@@ -1,9 +1,9 @@
 
 # LLM anonymous Trace-Replayer
 
-**Trace-Replayer** is a Rust-based tool for replaying **anonymous traces** (e.g., https://github.com/alibaba-edu/qwen-bailian-usagetraces-anon) containing block hashes, making it easier for developers to conduct **debugging and performance benchmarking** of LLM serving systems.
+**Trace-Replayer** is a Rust-based tool for replaying **anonymous traces** (e.g., https://github.com/alibaba-edu/qwen-bailian-usagetraces-anon) containing block hashes on backend serving systems (e.g., vLLM, a cluster of vLLM, etc), making it easier for developers to conduct **debugging and performance benchmarking** of LLM serving systems.
 
-At a high-level, it reconstructs **prompts** based on **prompt length + block hashes** recorded in the trace (preserving the same KVCache hit patterns),
+At a high-level, it reconstructs **prompts** based on **prompt length + block hashes** recorded in the trace (preserving the same KVCache hit patterns) on-the-fly,
 sends requests to specified API endpoints, and records responses for further analysis
 and evaluation.
 
@@ -39,7 +39,9 @@ while using only **~30 CPU threads**, which is sufficient for stress testing a
 
 ---
 
-## Supported APIs
+## Supported backend APIs
+
+As long as the backend supports these APIs, we can use the trace replayer to replay the traces. The current supported APIs are: 
 
 - **OpenAI API**: `http://endpoint:port/chat/completion` (non-streaming)
 - **TGI (Text Generation Inference)**: `http://endpoint:port/generate` (non-streaming)
