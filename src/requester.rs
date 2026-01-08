@@ -191,7 +191,7 @@ pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
 
             tx.send_async(request_handle).await.unwrap();
         }
-        tracing::info!("Requester exited.");
+        tracing::debug!("Requester exited.");
     });
     handle
 }
@@ -279,7 +279,7 @@ pub fn spawn_request_loop_debug<A: 'static + LLMApi + Send>(
 
             tx.send_async(request_handle).await.unwrap();
         }
-        tracing::info!("Requester exited.");
+        tracing::debug!("Requester exited.");
     });
 
     handle
