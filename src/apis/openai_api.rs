@@ -1,4 +1,4 @@
-use super::{LLMApi, RequestError, MODEL_NAME};
+use super::{LLMApi, RequestError, METRIC_PERCENTILES, MODEL_NAME};
 use futures_util::TryStreamExt;
 use reqwest::Response;
 use serde_json::json;
@@ -12,6 +12,8 @@ use tokio_util::io::StreamReader;
 
 #[derive(Copy, Clone)]
 pub struct OpenAIApi;
+
+const DEFAULT_PERCENTILES: [u32; 3] = [90, 95, 99];
 
 #[async_trait::async_trait]
 impl LLMApi for OpenAIApi {
@@ -27,7 +29,7 @@ impl LLMApi for OpenAIApi {
                 }
             ],
             "stream": stream,
-            "min_tokens": output_length,
+            "min_tokens": output_length, // 标准的 openAI API 不支持，需测试引擎（如 vLLM）支持
             "max_tokens": output_length,
         });
 
@@ -141,37 +143,27 @@ impl LLMApi for OpenAIApi {
             result.insert("avg_time_between_tokens".to_string(), avg_tbt.to_string());
         }
 
-        // p90_time_between_tokens, p95_time_between_tokens, p99_time_between_tokens
+        // percentile_time_between_tokens
         // need to sort for computing percentage
         if !tbt_values.is_empty() {
             let mut sorted_tbt = tbt_values.clone();
-            sorted_tbt.sort();
+            sorted_tbt.sort_unstable();
 
             let len = sorted_tbt.len();
             if len > 0 {
-                // p90
-                let p90_idx = (len as f64 * 0.9).ceil() as usize - 1;
-                let p90_idx = p90_idx.min(len - 1);
-                result.insert(
-                    "p90_time_between_tokens".to_string(),
-                    sorted_tbt[p90_idx].to_string(),
-                );
-
-                // p95
-                let p95_idx = (len as f64 * 0.95).ceil() as usize - 1;
-                let p95_idx = p95_idx.min(len - 1);
-                result.insert(
-                    "p95_time_between_tokens".to_string(),
-                    sorted_tbt[p95_idx].to_string(),
-                );
-
-                // p99
-                let p99_idx = (len as f64 * 0.99).ceil() as usize - 1;
-                let p99_idx = p99_idx.min(len - 1);
-                result.insert(
-                    "p99_time_between_tokens".to_string(),
-                    sorted_tbt[p99_idx].to_string(),
-                );
+                let percentiles = METRIC_PERCENTILES
+                    .get()
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&DEFAULT_PERCENTILES);
+                for percentile in percentiles {
+                    let idx = (len as f64 * (*percentile as f64 / 100.0)).ceil() as isize - 1;
+                    let idx = idx.max(0) as usize;
+                    let idx = idx.min(len - 1);
+                    result.insert(
+                        format!("p{percentile}_time_between_tokens"),
+                        sorted_tbt[idx].to_string(),
+                    );
+                }
             }
         }
 

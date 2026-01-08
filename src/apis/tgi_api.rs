@@ -2,9 +2,11 @@ use std::collections::BTreeMap;
 
 use reqwest::Response;
 
-use super::{LLMApi, RequestError};
+use super::{LLMApi, RequestError, METRIC_PERCENTILES};
 use std::time::Duration;
 pub struct TGIApi;
+
+const DEFAULT_PERCENTILES: [u32; 3] = [90, 95, 99];
 
 impl Copy for TGIApi {}
 
@@ -116,41 +118,24 @@ impl LLMApi for TGIApi {
                 avg_time_between_tokens,
             );
 
-            let p90_time_between_tokens = response
-                .headers()
-                .get("x-p90-time-between-tokens")
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .to_string();
-            map.insert(
-                "p90_time_between_tokens".to_string(),
-                p90_time_between_tokens,
-            );
-
-            let p95_time_between_tokens = response
-                .headers()
-                .get("x-p95-time-between-tokens")
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .to_string();
-            map.insert(
-                "p95_time_between_tokens".to_string(),
-                p95_time_between_tokens,
-            );
-
-            let p99_time_between_tokens = response
-                .headers()
-                .get("x-p99-time-between-tokens")
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .to_string();
-            map.insert(
-                "p99_time_between_tokens".to_string(),
-                p99_time_between_tokens,
-            );
+            let percentiles = METRIC_PERCENTILES
+                .get()
+                .map(|v| v.as_slice())
+                .unwrap_or(&DEFAULT_PERCENTILES);
+            for percentile in percentiles {
+                let header_name = match percentile {
+                    90 => "x-p90-time-between-tokens",
+                    95 => "x-p95-time-between-tokens",
+                    99 => "x-p99-time-between-tokens",
+                    _ => continue,
+                };
+                if let Some(value) = response.headers().get(header_name) {
+                    map.insert(
+                        format!("p{percentile}_time_between_tokens"),
+                        value.to_str().unwrap().to_string(),
+                    );
+                }
+            }
 
             let output_length = response
                 .headers()

@@ -23,6 +23,7 @@ use crate::{
     timeout_secs_upon_slo,
     token_sampler::TokenSampler,
 };
+use crate::apis::METRIC_PERCENTILES;
 
 #[allow(dead_code)]
 async fn request(endpoint: &str, json_body: String) -> Result<Response, reqwest::Error> {
@@ -290,15 +291,166 @@ pub fn spawn_request_loop_debug<A: 'static + LLMApi + Send>(
 /// Report loop exits when the response receiver is closed.
 pub async fn report_loop(
     mut output_jsonl_file: File,
+    mut summary_json_file: File,
     response_receiver: flume::Receiver<BTreeMap<String, String>>,
 ) {
     let mut buf_writer = BufWriter::new(&mut output_jsonl_file);
+    let mut summary = SummaryStats::new();
     while let Ok(metrics) = response_receiver.recv_async().await {
+        summary.record(&metrics);
         let line = serde_json::to_string(&metrics).unwrap();
         buf_writer.write_all(line.as_bytes()).await.unwrap();
         buf_writer.write_all(b"\n").await.unwrap();
         buf_writer.flush().await.unwrap();
     }
+    if let Some(metrics) = summary.finalize() {
+        let line = serde_json::to_string(&metrics).unwrap();
+        summary_json_file.write_all(line.as_bytes()).await.unwrap();
+        summary_json_file.flush().await.unwrap();
+    }
+}
+
+struct SummaryStats {
+    total_requests: u64,
+    success_requests: u64,
+    total_output_tokens: u64,
+    min_s_time: Option<u64>,
+    max_e_time: Option<u64>,
+    ttft_values: Vec<u64>,
+    tpot_values: Vec<u64>,
+    e2e_values: Vec<u64>,
+}
+
+impl SummaryStats {
+    fn new() -> Self {
+        Self {
+            total_requests: 0,
+            success_requests: 0,
+            total_output_tokens: 0,
+            min_s_time: None,
+            max_e_time: None,
+            ttft_values: Vec::new(),
+            tpot_values: Vec::new(),
+            e2e_values: Vec::new(),
+        }
+    }
+
+    fn record(&mut self, metrics: &BTreeMap<String, String>) {
+        self.total_requests += 1;
+
+        if let Some(status) = metrics.get("status") {
+            if status
+                .parse::<u16>()
+                .map(|code| (200..300).contains(&code))
+                .unwrap_or(false)
+            {
+                self.success_requests += 1;
+            }
+        }
+
+        if let Some(output_length) = metrics.get("output_length").and_then(|v| v.parse().ok()) {
+            self.total_output_tokens = self.total_output_tokens.saturating_add(output_length);
+        }
+
+        if let Some(s_time) = metrics.get("s_time").and_then(|v| v.parse().ok()) {
+            self.min_s_time = Some(self.min_s_time.map_or(s_time, |min| min.min(s_time)));
+        }
+        if let Some(e_time) = metrics.get("e_time").and_then(|v| v.parse().ok()) {
+            self.max_e_time = Some(self.max_e_time.map_or(e_time, |max| max.max(e_time)));
+        }
+
+        if let Some(ttft) = metrics.get("first_token_time").and_then(|v| v.parse().ok()) {
+            self.ttft_values.push(ttft);
+        }
+        if let Some(tpot) = metrics
+            .get("avg_time_between_tokens")
+            .and_then(|v| v.parse().ok())
+        {
+            self.tpot_values.push(tpot);
+        }
+        if let Some(e2e) = metrics.get("span_time").and_then(|v| v.parse().ok()) {
+            self.e2e_values.push(e2e);
+        }
+    }
+
+    fn finalize(&mut self) -> Option<BTreeMap<String, String>> {
+        if self.total_requests == 0 {
+            return None;
+        }
+
+        let percentiles = METRIC_PERCENTILES
+            .get()
+            .map(|v| v.as_slice())
+            .unwrap_or(&[90, 95, 99]);
+
+        let mut summary = BTreeMap::new();
+        summary.insert("type".to_string(), "summary".to_string());
+        summary.insert(
+            "requests_total".to_string(),
+            self.total_requests.to_string(),
+        );
+        summary.insert(
+            "requests_success".to_string(),
+            self.success_requests.to_string(),
+        );
+        summary.insert(
+            "output_tokens_total".to_string(),
+            self.total_output_tokens.to_string(),
+        );
+
+        let duration_ms = match (self.min_s_time, self.max_e_time) {
+            (Some(start), Some(end)) if end >= start => end - start,
+            _ => 0,
+        };
+        summary.insert("duration_ms".to_string(), duration_ms.to_string());
+        if duration_ms > 0 {
+            let duration_secs = duration_ms as f64 / 1000.0;
+            summary.insert(
+                "throughput_rps".to_string(),
+                format!("{:.3}", self.total_requests as f64 / duration_secs),
+            );
+            summary.insert(
+                "throughput_tps".to_string(),
+                format!("{:.3}", self.total_output_tokens as f64 / duration_secs),
+            );
+        }
+
+        let ttft = compute_percentiles(&mut self.ttft_values, percentiles);
+        for (percentile, value) in ttft {
+            summary.insert(format!("ttft_p{percentile}_ms"), value.to_string());
+        }
+        let tpot = compute_percentiles(&mut self.tpot_values, percentiles);
+        for (percentile, value) in tpot {
+            summary.insert(format!("tpot_p{percentile}_ms"), value.to_string());
+        }
+        let e2e = compute_percentiles(&mut self.e2e_values, percentiles);
+        for (percentile, value) in e2e {
+            summary.insert(format!("e2e_p{percentile}_ms"), value.to_string());
+        }
+
+        summary.insert("ttft_samples".to_string(), self.ttft_values.len().to_string());
+        summary.insert("tpot_samples".to_string(), self.tpot_values.len().to_string());
+        summary.insert("e2e_samples".to_string(), self.e2e_values.len().to_string());
+
+        Some(summary)
+    }
+}
+
+fn compute_percentiles(values: &mut Vec<u64>, percentiles: &[u32]) -> Vec<(u32, u64)> {
+    if values.is_empty() {
+        return Vec::new();
+    }
+    values.sort_unstable();
+    let len = values.len();
+    percentiles
+        .iter()
+        .map(|percentile| {
+            let idx = (len as f64 * (*percentile as f64 / 100.0)).ceil() as isize - 1;
+            let idx = idx.max(0) as usize;
+            let idx = idx.min(len - 1);
+            (*percentile, values[idx])
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -339,7 +491,8 @@ mod tests {
         // ====== 准备输出通道 ======
         let (tx, rx) = flume::unbounded();
         let output_file = File::create("tmp/inflate_latency.jsonl").await.unwrap();
-        let reporter = tokio::spawn(report_loop(output_file, rx));
+        let summary_file = File::create("tmp/summary.json").await.unwrap();
+        let reporter = tokio::spawn(report_loop(output_file, summary_file, rx));
 
         // ====== 测试循环 ======
         let iter = dataset.iter();
