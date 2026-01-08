@@ -404,7 +404,7 @@ impl TokenSampler {
                     if let Some(ragged_tx) = snd_data_txs.get(size - 1) {
                         let _ = ragged_tx.try_send(inv_sample);
                     } else {
-                        tracing::warn!("Expect length: {n}, get length: {size}");
+                        tracing::debug!("Expect length: {n}, get length: {size}");
                     }
                 }
                 Err(BatchSampleError::EndOfContext) => {
