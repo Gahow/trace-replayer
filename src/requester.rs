@@ -85,8 +85,8 @@ pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
     static BASETIME: OnceLock<Instant> = OnceLock::new();
     static RETURNCODE: AtomicI32 = AtomicI32::new(0);
     BASETIME.get_or_init(|| Instant::now());
-    fn get_timestamp() -> u64 {
-        BASETIME.get().unwrap().elapsed().as_millis() as u64
+    fn get_timestamp() -> f64 {
+        BASETIME.get().unwrap().elapsed().as_secs_f64() * 1000.0
     }
 
     let rr = dataset.rps();
@@ -123,7 +123,7 @@ pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
             let endpoint = endpoint.clone();
             let response_sender = response_sender.clone();
 
-            let curr_timestamp = get_timestamp();
+            let curr_timestamp = get_timestamp() as u64;
             let next_timestamp = ((*dataset).timestamp(data_index) as f64 / scale_factor) as u64;
 
             if next_timestamp > curr_timestamp + 1 {
@@ -137,7 +137,7 @@ pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
             let request_handle = spawn(async move {
                 let json_body = A::request_json_body(prompt, output_length, stream);
                 let s_time = get_timestamp();
-                let s_time_drift = s_time.saturating_sub(next_timestamp);
+                let s_time_drift = s_time - next_timestamp as f64;
                 match post_with_timeout::<A>(
                     client,
                     endpoint.as_str(),
@@ -150,14 +150,17 @@ pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
                     Ok(mut metrics) => {
                         let e_time = get_timestamp();
 
-                        metrics.insert("s_time".to_string(), s_time.to_string());
-                        metrics.insert("s_time_drift".to_string(), s_time_drift.to_string());
-                        metrics.insert("e_time".to_string(), e_time.to_string());
+                        metrics.insert("s_time".to_string(), format!("{s_time:.3}"));
+                        metrics.insert("s_time_drift".to_string(), format!("{s_time_drift:.3}"));
+                        metrics.insert("e_time".to_string(), format!("{e_time:.3}"));
                         metrics.insert("input_length".to_string(), input_length.to_string());
                         metrics.insert("output_length".to_string(), output_length.to_string());
 
                         let span_time = e_time - s_time;
-                        metrics.insert("span_time".to_string(), span_time.to_string());
+                        metrics.insert(
+                            "span_time".to_string(),
+                            format!("{span_time:.3}"),
+                        );
                         response_sender.send(metrics).unwrap();
                     }
                     Err(RequestError::Timeout) => {
@@ -167,14 +170,17 @@ pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
                             "status".to_owned(),
                             "timeout".to_owned(),
                         )]);
-                        metrics.insert("s_time".to_string(), s_time.to_string());
-                        metrics.insert("s_time_drift".to_string(), s_time_drift.to_string());
-                        metrics.insert("e_time".to_string(), e_time.to_string());
+                        metrics.insert("s_time".to_string(), format!("{s_time:.3}"));
+                        metrics.insert("s_time_drift".to_string(), format!("{s_time_drift:.3}"));
+                        metrics.insert("e_time".to_string(), format!("{e_time:.3}"));
                         metrics.insert("input_length".to_string(), input_length.to_string());
                         metrics.insert("output_length".to_string(), output_length.to_string());
 
                         let span_time = e_time - s_time;
-                        metrics.insert("span_time".to_string(), span_time.to_string());
+                        metrics.insert(
+                            "span_time".to_string(),
+                            format!("{span_time:.3}"),
+                        );
                         response_sender.send(metrics).unwrap();
                     }
                     Err(RequestError::Other(error)) => {
@@ -210,8 +216,8 @@ pub fn spawn_request_loop_debug<A: 'static + LLMApi + Send>(
     static RETURNCODE: AtomicI32 = AtomicI32::new(0);
     BASETIME.get_or_init(|| Instant::now());
 
-    fn get_timestamp() -> u64 {
-        BASETIME.get().unwrap().elapsed().as_millis() as u64
+    fn get_timestamp() -> f64 {
+        BASETIME.get().unwrap().elapsed().as_secs_f64() * 1000.0
     }
 
     let rr = dataset.rps();
@@ -244,7 +250,7 @@ pub fn spawn_request_loop_debug<A: 'static + LLMApi + Send>(
             let tokenizer = validate_tokenizer.clone();
             let response_sender = response_sender.clone();
 
-            let curr_timestamp = get_timestamp();
+            let curr_timestamp = get_timestamp() as u64;
             // milisecond
             let next_timestamp = ((*dataset).timestamp(data_index) as f64 / scale_factor) as u64;
 
@@ -257,7 +263,7 @@ pub fn spawn_request_loop_debug<A: 'static + LLMApi + Send>(
 
             let request_handle = spawn(async move {
                 let s_time = get_timestamp();
-                let s_time_drift = s_time.saturating_sub(next_timestamp);
+                let s_time_drift = s_time - next_timestamp as f64;
 
                 let validate_len = tokenizer
                     .encode(sample.clone(), false)
@@ -272,8 +278,8 @@ pub fn spawn_request_loop_debug<A: 'static + LLMApi + Send>(
                 metrics.insert("chat_id".to_string(), data_index.to_string());
                 metrics.insert("input_length".to_string(), input_length.to_string());
                 metrics.insert("output_length".to_string(), output_length.to_string());
-                metrics.insert("s_time".to_string(), s_time.to_string());
-                metrics.insert("s_time_drift".to_string(), s_time_drift.to_string());
+                metrics.insert("s_time".to_string(), format!("{s_time:.3}"));
+                metrics.insert("s_time_drift".to_string(), format!("{s_time_drift:.3}"));
 
                 response_sender.send(metrics).unwrap();
             });
@@ -304,8 +310,9 @@ pub async fn report_loop(
         buf_writer.flush().await.unwrap();
     }
     if let Some(metrics) = summary.finalize() {
-        let line = serde_json::to_string(&metrics).unwrap();
+        let line = serde_json::to_string_pretty(&metrics).unwrap();
         summary_json_file.write_all(line.as_bytes()).await.unwrap();
+        summary_json_file.write_all(b"\n").await.unwrap();
         summary_json_file.flush().await.unwrap();
     }
 }
@@ -314,11 +321,11 @@ struct SummaryStats {
     total_requests: u64,
     success_requests: u64,
     total_output_tokens: u64,
-    min_s_time: Option<u64>,
-    max_e_time: Option<u64>,
-    ttft_values: Vec<u64>,
-    tpot_values: Vec<u64>,
-    e2e_values: Vec<u64>,
+    min_s_time: Option<f64>,
+    max_e_time: Option<f64>,
+    ttft_values: Vec<f64>,
+    tpot_values: Vec<f64>,
+    e2e_values: Vec<f64>,
 }
 
 impl SummaryStats {
@@ -362,11 +369,15 @@ impl SummaryStats {
         if let Some(ttft) = metrics.get("first_token_time").and_then(|v| v.parse().ok()) {
             self.ttft_values.push(ttft);
         }
-        if let Some(tpot) = metrics
-            .get("avg_time_between_tokens")
-            .and_then(|v| v.parse().ok())
-        {
-            self.tpot_values.push(tpot);
+        if let (Some(total_time), Some(output_length)) = (
+            metrics.get("total_time").and_then(|v| v.parse::<f64>().ok()),
+            metrics
+                .get("output_length")
+                .and_then(|v| v.parse::<f64>().ok()),
+        ) {
+            if output_length > 0.0 {
+                self.tpot_values.push(total_time / output_length);
+            }
         }
         if let Some(e2e) = metrics.get("span_time").and_then(|v| v.parse().ok()) {
             self.e2e_values.push(e2e);
@@ -384,7 +395,6 @@ impl SummaryStats {
             .unwrap_or(&[90, 95, 99]);
 
         let mut summary = BTreeMap::new();
-        summary.insert("type".to_string(), "summary".to_string());
         summary.insert(
             "requests_total".to_string(),
             self.total_requests.to_string(),
@@ -400,11 +410,11 @@ impl SummaryStats {
 
         let duration_ms = match (self.min_s_time, self.max_e_time) {
             (Some(start), Some(end)) if end >= start => end - start,
-            _ => 0,
+            _ => 0.0,
         };
-        summary.insert("duration_ms".to_string(), duration_ms.to_string());
-        if duration_ms > 0 {
-            let duration_secs = duration_ms as f64 / 1000.0;
+        summary.insert("duration_ms".to_string(), format!("{duration_ms:.3}"));
+        if duration_ms > 0.0 {
+            let duration_secs = duration_ms / 1000.0;
             summary.insert(
                 "throughput_rps".to_string(),
                 format!("{:.3}", self.total_requests as f64 / duration_secs),
@@ -417,30 +427,39 @@ impl SummaryStats {
 
         let ttft = compute_percentiles(&mut self.ttft_values, percentiles);
         for (percentile, value) in ttft {
-            summary.insert(format!("ttft_p{percentile}_ms"), value.to_string());
+            summary.insert(format!("ttft_p{percentile}_ms"), format_ms(value));
         }
         let tpot = compute_percentiles(&mut self.tpot_values, percentiles);
         for (percentile, value) in tpot {
-            summary.insert(format!("tpot_p{percentile}_ms"), value.to_string());
+            summary.insert(format!("tpot_p{percentile}_ms"), format_ms(value));
         }
         let e2e = compute_percentiles(&mut self.e2e_values, percentiles);
         for (percentile, value) in e2e {
-            summary.insert(format!("e2e_p{percentile}_ms"), value.to_string());
+            summary.insert(format!("e2e_p{percentile}_ms"), format_ms(value));
         }
 
-        summary.insert("ttft_samples".to_string(), self.ttft_values.len().to_string());
-        summary.insert("tpot_samples".to_string(), self.tpot_values.len().to_string());
-        summary.insert("e2e_samples".to_string(), self.e2e_values.len().to_string());
+        summary.insert(
+            "ttft_mean_ms".to_string(),
+            format_ms(mean(&self.ttft_values)),
+        );
+        summary.insert(
+            "tpot_mean_ms".to_string(),
+            format_ms(mean(&self.tpot_values)),
+        );
+        summary.insert(
+            "e2e_mean_ms".to_string(),
+            format_ms(mean(&self.e2e_values)),
+        );
 
         Some(summary)
     }
 }
 
-fn compute_percentiles(values: &mut Vec<u64>, percentiles: &[u32]) -> Vec<(u32, u64)> {
+fn compute_percentiles(values: &mut Vec<f64>, percentiles: &[u32]) -> Vec<(u32, f64)> {
     if values.is_empty() {
         return Vec::new();
     }
-    values.sort_unstable();
+    values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let len = values.len();
     percentiles
         .iter()
@@ -451,6 +470,17 @@ fn compute_percentiles(values: &mut Vec<u64>, percentiles: &[u32]) -> Vec<(u32, 
             (*percentile, values[idx])
         })
         .collect()
+}
+
+fn mean(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.iter().sum::<f64>() / values.len() as f64
+}
+
+fn format_ms(value: f64) -> String {
+    format!("{:.3}", value)
 }
 
 #[cfg(test)]

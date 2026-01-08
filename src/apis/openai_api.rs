@@ -62,8 +62,8 @@ impl LLMApi for OpenAIApi {
         let mut first_token_time: Option<TokioInstant> = None;
         let mut last_token_time: Option<TokioInstant> = None;
         let mut token_count = 0;
-        let mut tbt_values = Vec::new();
-        let mut tbt_except_first = Vec::new();
+        let mut tbt_values: Vec<f64> = Vec::new();
+        let mut tbt_except_first: Vec<f64> = Vec::new();
         let start_time = TokioInstant::now();
 
         loop {
@@ -95,13 +95,13 @@ impl LLMApi for OpenAIApi {
                             if first_token_time.is_none() {
                                 first_token_time = Some(now);
                                 let first_token_duration =
-                                    now.duration_since(start_time).as_millis() as u64;
+                                    now.duration_since(start_time).as_secs_f64() * 1000.0;
                                 result.insert(
                                     "first_token_time".to_string(),
-                                    first_token_duration.to_string(),
+                                    format!("{first_token_duration:.3}"),
                                 );
                             } else if let Some(last) = last_token_time {
-                                let tbt = now.duration_since(last).as_millis() as u64;
+                                let tbt = now.duration_since(last).as_secs_f64() * 1000.0;
                                 tbt_values.push(tbt);
                                 if token_count > 2 {
                                     tbt_except_first.push(tbt);
@@ -120,34 +120,43 @@ impl LLMApi for OpenAIApi {
 
         if let Some(first) = first_token_time {
             if let Some(last) = last_token_time {
-                let total_time = last.duration_since(first).as_millis() as u64;
-                result.insert("total_time".to_string(), total_time.to_string());
+                let total_time = last.duration_since(first).as_secs_f64() * 1000.0;
+                result.insert("total_time".to_string(), format!("{total_time:.3}"));
             }
         }
 
         if !tbt_except_first.is_empty() {
-            let max_tbt_except_first = *tbt_except_first.iter().max().unwrap();
+            let max_tbt_except_first = tbt_except_first
+                .iter()
+                .copied()
+                .fold(f64::MIN, f64::max);
             result.insert(
                 "max_time_between_tokens_except_first".to_string(),
-                max_tbt_except_first.to_string(),
+                format!("{max_tbt_except_first:.3}"),
             );
         }
 
         if !tbt_values.is_empty() {
-            let max_tbt = *tbt_values.iter().max().unwrap();
-            result.insert("max_time_between_tokens".to_string(), max_tbt.to_string());
+            let max_tbt = tbt_values.iter().copied().fold(f64::MIN, f64::max);
+            result.insert(
+                "max_time_between_tokens".to_string(),
+                format!("{max_tbt:.3}"),
+            );
         }
 
         if !tbt_values.is_empty() {
-            let avg_tbt = (tbt_values.iter().sum::<u64>() as f64 / tbt_values.len() as f64) as u32;
-            result.insert("avg_time_between_tokens".to_string(), avg_tbt.to_string());
+            let avg_tbt = tbt_values.iter().sum::<f64>() / tbt_values.len() as f64;
+            result.insert(
+                "avg_time_between_tokens".to_string(),
+                format!("{avg_tbt:.3}"),
+            );
         }
 
         // percentile_time_between_tokens
         // need to sort for computing percentage
         if !tbt_values.is_empty() {
             let mut sorted_tbt = tbt_values.clone();
-            sorted_tbt.sort_unstable();
+            sorted_tbt.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
             let len = sorted_tbt.len();
             if len > 0 {
@@ -161,7 +170,7 @@ impl LLMApi for OpenAIApi {
                     let idx = idx.min(len - 1);
                     result.insert(
                         format!("p{percentile}_time_between_tokens"),
-                        sorted_tbt[idx].to_string(),
+                        format!("{:.3}", sorted_tbt[idx]),
                     );
                 }
             }

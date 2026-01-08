@@ -16,6 +16,13 @@ impl Clone for TGIApi {
     }
 }
 
+fn normalize_ms(value: &str) -> String {
+    value
+        .parse::<f64>()
+        .map(|v| format!("{v:.3}"))
+        .unwrap_or_else(|_| value.to_string())
+}
+
 #[async_trait::async_trait]
 impl LLMApi for TGIApi {
     const AIBRIX_PRIVATE_HEADER: bool = false;
@@ -45,36 +52,35 @@ impl LLMApi for TGIApi {
                 .get("x-first-token-time")
                 .unwrap()
                 .to_str()
-                .unwrap()
-                .to_string();
-            map.insert("first_token_time".to_string(), first_token_time);
+                .unwrap();
+            map.insert(
+                "first_token_time".to_string(),
+                normalize_ms(first_token_time),
+            );
 
             let total_time = response
                 .headers()
                 .get("x-total-time")
                 .unwrap()
                 .to_str()
-                .unwrap()
-                .to_string();
-            map.insert("total_time".to_string(), total_time);
+                .unwrap();
+            map.insert("total_time".to_string(), normalize_ms(total_time));
 
             let inference_time = response
                 .headers()
                 .get("x-inference-time")
                 .unwrap()
                 .to_str()
-                .unwrap()
-                .to_string();
-            map.insert("inference_time".to_string(), inference_time);
+                .unwrap();
+            map.insert("inference_time".to_string(), normalize_ms(inference_time));
 
             let queue_time = response
                 .headers()
                 .get("x-queue-time")
                 .unwrap()
                 .to_str()
-                .unwrap()
-                .to_string();
-            map.insert("queue_time".to_string(), queue_time);
+                .unwrap();
+            map.insert("queue_time".to_string(), normalize_ms(queue_time));
 
             let first_decode_token_time = response
                 .headers()
@@ -82,7 +88,11 @@ impl LLMApi for TGIApi {
                 .map_or("nil".to_string(), |hv| hv.to_str().unwrap().to_string());
             map.insert(
                 "first_decode_token_time".to_string(),
-                first_decode_token_time,
+                if first_decode_token_time == "nil" {
+                    first_decode_token_time
+                } else {
+                    normalize_ms(&first_decode_token_time)
+                },
             );
 
             let max_time_between_tokens_except_first = response
@@ -91,7 +101,11 @@ impl LLMApi for TGIApi {
                 .map_or("nil".to_string(), |hv| hv.to_str().unwrap().to_string());
             map.insert(
                 "max_time_between_tokens_except_first".to_string(),
-                max_time_between_tokens_except_first,
+                if max_time_between_tokens_except_first == "nil" {
+                    max_time_between_tokens_except_first
+                } else {
+                    normalize_ms(&max_time_between_tokens_except_first)
+                },
             );
 
             let max_time_between_tokens = response
@@ -99,11 +113,10 @@ impl LLMApi for TGIApi {
                 .get("x-max-time-between-tokens")
                 .unwrap()
                 .to_str()
-                .unwrap()
-                .to_string();
+                .unwrap();
             map.insert(
                 "max_time_between_tokens".to_string(),
-                max_time_between_tokens,
+                normalize_ms(max_time_between_tokens),
             );
 
             let avg_time_between_tokens = response
@@ -111,11 +124,10 @@ impl LLMApi for TGIApi {
                 .get("x-avg-time-between-tokens")
                 .unwrap()
                 .to_str()
-                .unwrap()
-                .to_string();
+                .unwrap();
             map.insert(
                 "avg_time_between_tokens".to_string(),
-                avg_time_between_tokens,
+                normalize_ms(avg_time_between_tokens),
             );
 
             let percentiles = METRIC_PERCENTILES
@@ -130,9 +142,10 @@ impl LLMApi for TGIApi {
                     _ => continue,
                 };
                 if let Some(value) = response.headers().get(header_name) {
+                    let value_str = value.to_str().unwrap();
                     map.insert(
                         format!("p{percentile}_time_between_tokens"),
-                        value.to_str().unwrap().to_string(),
+                        normalize_ms(value_str),
                     );
                 }
             }
