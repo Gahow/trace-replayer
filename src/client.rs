@@ -5,7 +5,9 @@ use std::sync::{
 };
 
 use clap::Parser;
-use request_sim::apis::{OpenAIApi, AIBRIX_ROUTE_STRATEGY, METRIC_PERCENTILES};
+use request_sim::apis::{
+    DashScopeApi, OpenAIApi, AIBRIX_ROUTE_STRATEGY, AUTHORIZATION_BEARER_TOKEN, METRIC_PERCENTILES,
+};
 use request_sim::{
     apis::{TGIApi, MODEL_NAME},
     dataset::{BailianDataset, LLMTrace, MooncakeDataset},
@@ -45,7 +47,7 @@ struct Args {
     #[clap(long, required = true)]
     endpoint: String,
 
-    /// LLM API server type. Either "tgi" (text-generation-inference), or "distserve"
+    /// LLM API server type. Supports "tgi", "openai", "aibrix", "dashscope".
     #[clap(long, short, required = true)]
     api: String,
 
@@ -107,7 +109,11 @@ struct Args {
     #[clap(long, value_delimiter = ',', default_value = "90,95,99")]
     metric_percentile: Vec<u32>,
 
-    #[clap[long]]
+    /// Optional bearer token injected into Authorization header.
+    #[clap(long)]
+    authorization_bearer_token: Option<String>,
+
+    #[clap(long)]
     early_stop_error_threshold: Option<u32>,
 }
 
@@ -133,6 +139,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
         tpot_slo,
         stream,
         metric_percentile,
+        authorization_bearer_token,
         early_stop_error_threshold,
     } = args;
 
@@ -149,6 +156,9 @@ async fn async_main(args: Args) -> Result<(), i32> {
         );
     }
     METRIC_PERCENTILES.get_or_init(|| metric_percentile);
+    if let Some(token) = authorization_bearer_token {
+        AUTHORIZATION_BEARER_TOKEN.get_or_init(|| token);
+    }
 
     let output_file = tokio::fs::OpenOptions::new()
         .create(true)
@@ -250,6 +260,30 @@ async fn async_main(args: Args) -> Result<(), i32> {
             ));
             tracing::info!("Client start");
             spawn_request_loop_with_timestamp::<OpenAIApi>(
+                endpoint,
+                dataset,
+                token_sampler,
+                scale_factor.unwrap(),
+                tx,
+                interrupt_flag.clone(),
+                ttft_slo,
+                tpot_slo,
+                stream,
+                early_stop_error_threshold,
+            )
+        }
+        "dashscope" => {
+            MODEL_NAME.get_or_init(|| model_name.unwrap());
+            let dataset: Arc<Pin<Box<dyn LLMTrace>>> = Arc::new(dataset);
+            let token_sampler = Arc::new(TokenSampler::new(
+                Tokenizer::from_file(tokenizer).unwrap(),
+                tokenizer_config,
+                num_producer.unwrap_or(1),
+                channel_capacity.unwrap_or(128),
+                block_size,
+            ));
+            tracing::info!("Client start");
+            spawn_request_loop_with_timestamp::<DashScopeApi>(
                 endpoint,
                 dataset,
                 token_sampler,

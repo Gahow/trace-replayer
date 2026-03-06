@@ -11,7 +11,7 @@ This document describes all command-line arguments supported by **Trace-Replayer
 | `--tokenizer`        | `String`         | Path to `tokenizer.json` used for tokenization.                                                          |
 | `--tokenizer-config` | `String`         | Path to `tokenizer_config.json`.                                                                         |
 | `--endpoint`         | `String`         | Target HTTP endpoint. See **Supported APIs** for examples (e.g., TGI: `http://localhost:8000/generate`). |
-| `--api`, `-a`        | `String`         | LLM API type: `tgi`, `openai`, or `aibrix`.                                                              |
+| `--api`, `-a`        | `String`         | LLM API type: `tgi`, `openai`, `aibrix`, or `dashscope`.                                                 |
 | `--dataset`, `-d`    | `String`         | Dataset type: `bailian`, `mooncake`, `azure`.                                                            |
 | `--dataset-path`     | `Option<String>` | Path to the dataset file.                                                                                |
 
@@ -55,6 +55,7 @@ This document describes all command-line arguments supported by **Trace-Replayer
 | ---------------- | ---------------- | -------------------------------------------------- |
 | `--model-name`   | `Option<String>` | Model name used by the target inference framework. |
 | `--aibrix-route` | `Option<String>` | AIBrix routing strategy name.                      |
+| `--authorization-bearer-token` | `Option<String>` | Adds `Authorization: Bearer <token>` to each HTTP request. |
 
 
 ## SLO Parameters

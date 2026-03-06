@@ -20,7 +20,7 @@ use tokio::{
 
 use crate::apis::METRIC_PERCENTILES;
 use crate::{
-    apis::{LLMApi, RequestError, AIBRIX_ROUTE_STRATEGY},
+    apis::{LLMApi, RequestError, AIBRIX_ROUTE_STRATEGY, AUTHORIZATION_BEARER_TOKEN},
     dataset::LLMTrace,
     timeout_secs_upon_slo,
     token_sampler::TokenSampler,
@@ -52,6 +52,14 @@ async fn post_with_timeout<A: 'static + LLMApi + Send>(
 
     if !stream {
         req = req.timeout(timeout);
+    }
+    if stream && A::DASHSCOPE_SSE_HEADER {
+        req = req
+            .header("X-DashScope-SSE", "enable")
+            .header("Accept", "text/event-stream");
+    }
+    if let Some(token) = AUTHORIZATION_BEARER_TOKEN.get() {
+        req = req.bearer_auth(token);
     }
     if A::AIBRIX_PRIVATE_HEADER {
         req = req.header(
@@ -175,10 +183,23 @@ pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
                         metrics.insert("output_length".to_string(), output_length.to_string());
 
                         let span_time = e_time - s_time;
-                        metrics.insert(
-                            "span_time".to_string(),
-                            format!("{span_time:.3}"),
-                        );
+                        metrics.insert("span_time".to_string(), format!("{span_time:.3}"));
+                        if metrics
+                            .get("status")
+                            .and_then(|status| status.parse::<u16>().ok())
+                            .map(|code| (200..300).contains(&code))
+                            .unwrap_or(false)
+                        {
+                            if !metrics.contains_key("first_token_time") {
+                                metrics.insert(
+                                    "first_token_time".to_string(),
+                                    format!("{span_time:.3}"),
+                                );
+                            }
+                            if !metrics.contains_key("total_time") {
+                                metrics.insert("total_time".to_string(), format!("{span_time:.3}"));
+                            }
+                        }
                         response_sender.send(metrics).unwrap();
                     }
                     Err(RequestError::Timeout) => {
@@ -195,10 +216,7 @@ pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
                         metrics.insert("output_length".to_string(), output_length.to_string());
 
                         let span_time = e_time - s_time;
-                        metrics.insert(
-                            "span_time".to_string(),
-                            format!("{span_time:.3}"),
-                        );
+                        metrics.insert("span_time".to_string(), format!("{span_time:.3}"));
                         response_sender.send(metrics).unwrap();
                         error_count.fetch_add(1, Ordering::Relaxed);
                     }
@@ -391,7 +409,9 @@ impl SummaryStats {
             self.ttft_values.push(ttft);
         }
         if let (Some(total_time), Some(output_length)) = (
-            metrics.get("total_time").and_then(|v| v.parse::<f64>().ok()),
+            metrics
+                .get("total_time")
+                .and_then(|v| v.parse::<f64>().ok()),
             metrics
                 .get("output_length")
                 .and_then(|v| v.parse::<f64>().ok()),
@@ -467,10 +487,7 @@ impl SummaryStats {
             "tpot_mean_ms".to_string(),
             format_ms(mean(&self.tpot_values)),
         );
-        summary.insert(
-            "e2e_mean_ms".to_string(),
-            format_ms(mean(&self.e2e_values)),
-        );
+        summary.insert("e2e_mean_ms".to_string(), format_ms(mean(&self.e2e_values)));
 
         Some(summary)
     }

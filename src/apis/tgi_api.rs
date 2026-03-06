@@ -26,6 +26,7 @@ fn normalize_ms(value: &str) -> String {
 #[async_trait::async_trait]
 impl LLMApi for TGIApi {
     const AIBRIX_PRIVATE_HEADER: bool = false;
+    const DASHSCOPE_SSE_HEADER: bool = false;
 
     fn request_json_body(prompt: String, output_length: u64, _stream: bool) -> String {
         let json_body =

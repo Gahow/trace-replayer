@@ -14,6 +14,7 @@ pub static AIBRIX_ROUTE_STRATEGY: OnceLock<String> = OnceLock::new();
 #[async_trait::async_trait]
 impl LLMApi for AIBrixApi {
     const AIBRIX_PRIVATE_HEADER: bool = true;
+    const DASHSCOPE_SSE_HEADER: bool = false;
 
     fn request_json_body(prompt: String, output_length: u64, stream: bool) -> String {
         let json_body = json!({
